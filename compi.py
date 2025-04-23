@@ -1,7 +1,7 @@
 import ply.lex as lex
 import ply.yacc as yacc
 from collections import defaultdict
-# final1 LoopUnrolling , Loop Fusion , LICM 
+
 # --- Lexer ---
 tokens = (
     'NUMBER', 'ID', 'FOR', 'INT', 'LPAREN', 'RPAREN', 'LBRACE', 'RBRACE',
@@ -95,8 +95,12 @@ def p_statement(p):
     p[0] = p[1]
 
 def p_declaration(p):
-    '''declaration : INT ID LBRACKET NUMBER RBRACKET SEMICOLON'''
-    p[0] = ASTNode('decl', value={'id': p[2], 'size': p[4]})
+    '''declaration : INT ID LBRACKET NUMBER RBRACKET SEMICOLON
+                   | INT ID SEMICOLON'''
+    if len(p) == 7:
+        p[0] = ASTNode('decl', value={'id': p[2], 'size': p[4], 'is_array': True})
+    else:
+        p[0] = ASTNode('decl', value={'id': p[2], 'is_array': False})
 
 def p_for_loop(p):
     '''for_loop : FOR LPAREN for_init SEMICOLON for_cond SEMICOLON for_incr RPAREN LBRACE statements RBRACE'''
@@ -259,10 +263,12 @@ class Optimizer:
 
     def loop_unrolling(self, factor=2):
         for loop in self.program.loops:
+            # Calculate iterations based on condition operator
             if loop.cond_op == '<=':
                 iterations = loop.end - loop.start + 1
             else:  # '<'
                 iterations = loop.end - loop.start
+            
             if iterations % factor == 0:
                 new_body = []
                 for i in range(factor):
@@ -274,8 +280,10 @@ class Optimizer:
                         new_instr = IRInstruction(instr.op, args=new_args, result=new_result)
                         new_body.append(new_instr)
                 loop.body = new_body
-                # loop.end = loop.start + (loop.end - loop.start) // factor
-                loop.body.append(IRInstruction('inc', args=[loop.var, str(factor-1)]))
+                # Add increment for additional iterations (factor - 1)
+                if factor > 1:
+                    loop.body.append(IRInstruction('inc', args=[loop.var, str(factor - 1)]))
+                # No change to loop.end
             else:
                 print(f"Warning: Loop from {loop.start} to {loop.end} not unrollable by factor {factor}")
 
@@ -299,13 +307,19 @@ class Optimizer:
 # --- Code Generation ---
 def ir_to_code(program):
     code = []
+    # Generate declarations (array and scalar)
     for decl in program.decls:
-        code.append(f"int {decl['id']}[{decl['size']}];")
+        if decl.get('is_array', False):
+            code.append(f"int {decl['id']}[{decl['size']}];")
+        else:
+            code.append(f"int {decl['id']};")
+    # Generate non-loop instructions
     for instr in program.instructions:
         if instr.op == 'add':
             code.append(f"{instr.result} = {instr.args[0]} + {instr.args[1]};")
         elif instr.op == 'assign':
             code.append(f"{instr.result} = {instr.args[0]};")
+    # Generate loops
     for loop in program.loops:
         cond = '<=' if loop.cond_op == '<=' else '<'
         code.append(f"for (int {loop.var} = {loop.start}; {loop.var} {cond} {loop.end}; {loop.var}++) {{")
@@ -346,11 +360,11 @@ if __name__ == "__main__":
     int b[100];
     int c[100];
     int x;
-    for (int i = 0; i <= 100; i++) {
+    for (int i = 1; i <= 100; i++) {
         a[i] = b[i] + c[i];
         x = b[0] + c[0];
     }
-    for (int i = 0; i <= 100; i++) {
+    for (int i = 1; i <= 100; i++) {
         a[i] = a[i] + 1;
     }
     """
@@ -364,7 +378,7 @@ if __name__ == "__main__":
         minimal_input = """
         int a[100];
         int x;
-        for (int i = 0; i <= 100; i++) {
+        for (int i = 1; i <= 100; i++) {
             x = a[i] + 1;
         }
         """
